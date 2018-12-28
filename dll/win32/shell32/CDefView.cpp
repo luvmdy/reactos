@@ -128,6 +128,7 @@ class CDefView :
         BOOL CreateList();
         void UpdateListColors();
         BOOL InitList();
+        HRESULT DefMessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam);
         static INT CALLBACK ListViewCompareItems(LPARAM lParam1, LPARAM lParam2, LPARAM lpData);
 
         PCUITEMID_CHILD _PidlByItem(int i);
@@ -1860,7 +1861,7 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                 LVITEMW lvItem;
 
                 pidl = _PidlByItem(lpdi->item);
-                PITEMID_CHILD pidlNew;
+                PITEMID_CHILD pidlNew = NULL;
                 hr = m_pSFParent->SetNameOf(0, pidl, lpdi->item.pszText, SHGDN_INFOLDER, &pidlNew);
 
                 if (SUCCEEDED(hr) && pidlNew)
@@ -3263,13 +3264,29 @@ HRESULT CDefView::_MergeToolbar()
     return S_OK;
 }
 
+// The default processing of IShellFolderView callbacks
+HRESULT CDefView::DefMessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    // TODO: SFVM_GET_CUSTOMVIEWINFO, SFVM_WINDOWCREATED
+    TRACE("CDefView::DefMessageSFVCB uMsg=%u\n", uMsg);
+    return E_NOTIMPL;
+}
+
 HRESULT CDefView::_DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    HRESULT hr = E_NOTIMPL;
+
     if (m_pShellFolderViewCB)
     {
-        return m_pShellFolderViewCB->MessageSFVCB(uMsg, wParam, lParam);
+        hr = m_pShellFolderViewCB->MessageSFVCB(uMsg, wParam, lParam);
     }
-    return E_NOINTERFACE;
+
+    if (hr == E_NOTIMPL)
+    {
+        hr = DefMessageSFVCB(uMsg, wParam, lParam);
+    }
+
+    return hr;
 }
 
 HRESULT CDefView_CreateInstance(IShellFolder *pFolder, REFIID riid, LPVOID * ppvOut)

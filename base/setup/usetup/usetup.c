@@ -31,6 +31,7 @@
 #include "bootsup.h"
 #include "chkdsk.h"
 #include "cmdcons.h"
+#include "devinst.h"
 #include "format.h"
 
 #define NDEBUG
@@ -55,8 +56,6 @@ static WCHAR DefaultLanguage[20];   // Copy of string inside LanguageList
 static WCHAR DefaultKBLayout[20];   // Copy of string inside KeyboardList
 
 static BOOLEAN RepairUpdateFlag = FALSE;
-
-static HANDLE hPnpThread = NULL;
 
 static PPARTLIST PartitionList = NULL;
 static PPARTENTRY TempPartition = NULL;
@@ -633,7 +632,7 @@ SetupStartPage(PINPUT_RECORD Ir)
     PGENERIC_LIST_ENTRY ListEntry;
     PCWSTR LocaleId;
 
-    CONSOLE_SetStatusText(MUIGetString(STRING_PLEASEWAIT));
+    MUIDisplayPage(SETUP_INIT_PAGE);
 
     /* Initialize Setup, phase 1 */
     Error = InitializeSetup(&USetupData, 1);
@@ -643,12 +642,13 @@ SetupStartPage(PINPUT_RECORD Ir)
         return QUIT_PAGE;
     }
 
-    /* Start the PnP thread */
-    if (hPnpThread != NULL)
-    {
-        NtResumeThread(hPnpThread, NULL);
-        hPnpThread = NULL;
-    }
+    /* Initialize the user-mode PnP manager */
+    if (!EnableUserModePnpManager())
+        DPRINT1("The user-mode PnP manager could not initialize, expect unavailable devices!\n");
+
+    /* Wait for any immediate pending installations to finish */
+    if (WaitNoPendingInstallEvents(NULL) != STATUS_WAIT_0)
+        DPRINT1("WaitNoPendingInstallEvents() failed to wait!\n");
 
     CheckUnattendedSetup(&USetupData);
 
@@ -1607,12 +1607,26 @@ SelectPartitionPage(PINPUT_RECORD Ir)
             {
                 if (PartitionList->CurrentPartition->LogicalPartition)
                 {
+                    Error = LogicalPartitionCreationChecks(PartitionList);
+                    if (Error != NOT_AN_ERROR)
+                    {
+                        MUIDisplayError(Error, Ir, POPUP_WAIT_ANY_KEY);
+                        return SELECT_PARTITION_PAGE;
+                    }
+
                     CreateLogicalPartition(PartitionList,
                                            0ULL,
                                            TRUE);
                 }
                 else
                 {
+                    Error = PrimaryPartitionCreationChecks(PartitionList);
+                    if (Error != NOT_AN_ERROR)
+                    {
+                        MUIDisplayError(Error, Ir, POPUP_WAIT_ANY_KEY);
+                        return SELECT_PARTITION_PAGE;
+                    }
+
                     CreatePrimaryPartition(PartitionList,
                                            0ULL,
                                            TRUE);
@@ -1969,7 +1983,9 @@ CreatePrimaryPartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Bus,
                             DiskEntry->Id,
                             &DiskEntry->DriverName,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
     else
     {
@@ -1981,7 +1997,9 @@ CreatePrimaryPartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Port,
                             DiskEntry->Bus,
                             DiskEntry->Id,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
 
     CONSOLE_SetTextXY(6, 12, MUIGetString(STRING_HDDSIZE));
@@ -2128,7 +2146,9 @@ CreateExtendedPartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Bus,
                             DiskEntry->Id,
                             &DiskEntry->DriverName,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
     else
     {
@@ -2140,7 +2160,9 @@ CreateExtendedPartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Port,
                             DiskEntry->Bus,
                             DiskEntry->Id,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
 
     CONSOLE_SetTextXY(6, 12, MUIGetString(STRING_HDDSIZE));
@@ -2286,7 +2308,9 @@ CreateLogicalPartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Bus,
                             DiskEntry->Id,
                             &DiskEntry->DriverName,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
     else
     {
@@ -2298,7 +2322,9 @@ CreateLogicalPartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Port,
                             DiskEntry->Bus,
                             DiskEntry->Id,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
 
     CONSOLE_SetTextXY(6, 12, MUIGetString(STRING_HDDSIZE));
@@ -2525,7 +2551,9 @@ DeletePartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Bus,
                             DiskEntry->Id,
                             &DiskEntry->DriverName,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
     else
     {
@@ -2537,7 +2565,9 @@ DeletePartitionPage(PINPUT_RECORD Ir)
                             DiskEntry->Port,
                             DiskEntry->Bus,
                             DiskEntry->Id,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
 
     while (TRUE)
@@ -2580,7 +2610,7 @@ DeletePartitionPage(PINPUT_RECORD Ir)
  *  QuitPage
  *
  * SIDEEFFECTS
- *  Sets PartEntry->DiskEntry->LayoutBuffer->PartitionEntry[PartEntry->PartitionIndex].PartitionType (via UpdatePartitionType)
+ *  Calls UpdatePartitionType()
  *  Calls CheckActiveSystemPartition()
  *
  * RETURNS
@@ -2759,7 +2789,9 @@ SelectFileSystemPage(PINPUT_RECORD Ir)
                             DiskEntry->Bus,
                             DiskEntry->Id,
                             &DiskEntry->DriverName,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
 
         CONSOLE_SetTextXY(6, 12, MUIGetString(STRING_PARTFORMAT));
 
@@ -2820,7 +2852,9 @@ SelectFileSystemPage(PINPUT_RECORD Ir)
                             DiskEntry->Bus,
                             DiskEntry->Id,
                             &DiskEntry->DriverName,
-                            DiskEntry->NoMbr ? "GPT" : "MBR");
+                            DiskEntry->DiskStyle == PARTITION_STYLE_MBR ? L"MBR" :
+                            DiskEntry->DiskStyle == PARTITION_STYLE_GPT ? L"GPT" :
+                                                                          L"RAW");
     }
 
     if (FileSystemList == NULL)
@@ -3886,10 +3920,10 @@ BootLoaderPage(PINPUT_RECORD Ir)
         DPRINT("Found OS/2 boot manager partition\n");
         InstallOnFloppy = TRUE;
     }
-    else if (PartitionType == PARTITION_EXT2)
+    else if (PartitionType == PARTITION_LINUX)
     {
-        /* Linux EXT2 partition */
-        DPRINT("Found Linux EXT2 partition\n");
+        /* Linux partition */
+        DPRINT("Found Linux native partition (ext2/ext3/ReiserFS/BTRFS/etc)\n");
         InstallOnFloppy = FALSE;
     }
     else if (PartitionType == PARTITION_IFS)
@@ -4105,13 +4139,15 @@ BootLoaderHarddiskVbrPage(PINPUT_RECORD Ir)
 {
     NTSTATUS Status;
 
+    // FIXME! We must not use the partition type, but instead use the partition FileSystem!!
     Status = InstallVBRToPartition(&USetupData.SystemRootPath,
                                    &USetupData.SourceRootPath,
                                    &USetupData.DestinationArcPath,
                                    PartitionList->SystemPartition->PartitionType);
     if (!NT_SUCCESS(Status))
     {
-        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER);
+        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
+                        PartitionList->SystemPartition->FileSystem->FileSystemName);
         return QUIT_PAGE;
     }
 
@@ -4140,13 +4176,15 @@ BootLoaderHarddiskMbrPage(PINPUT_RECORD Ir)
     WCHAR DestinationDevicePathBuffer[MAX_PATH];
 
     /* Step 1: Write the VBR */
+    // FIXME! We must not use the partition type, but instead use the partition FileSystem!!
     Status = InstallVBRToPartition(&USetupData.SystemRootPath,
                                    &USetupData.SourceRootPath,
                                    &USetupData.DestinationArcPath,
                                    PartitionList->SystemPartition->PartitionType);
     if (!NT_SUCCESS(Status))
     {
-        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER);
+        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
+                        PartitionList->SystemPartition->FileSystem->FileSystemName);
         return QUIT_PAGE;
     }
 
@@ -4160,7 +4198,7 @@ BootLoaderHarddiskMbrPage(PINPUT_RECORD Ir)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("InstallMbrBootCodeToDisk() failed (Status %lx)\n", Status);
-        MUIDisplayError(ERROR_INSTALL_BOOTCODE, Ir, POPUP_WAIT_ENTER);
+        MUIDisplayError(ERROR_INSTALL_BOOTCODE, Ir, POPUP_WAIT_ENTER, L"MBR");
         return QUIT_PAGE;
     }
 
@@ -4455,10 +4493,6 @@ FlushPage(PINPUT_RECORD Ir)
 }
 
 
-DWORD WINAPI
-PnpEventThread(IN LPVOID lpParameter);
-
-
 /*
  * The start routine and page management
  */
@@ -4477,19 +4511,13 @@ RunUSetup(VOID)
     if (!NT_SUCCESS(Status))
         DPRINT1("NtInitializeRegistry() failed (Status 0x%08lx)\n", Status);
 
-    /* Create the PnP thread in suspended state */
-    Status = RtlCreateUserThread(NtCurrentProcess(),
-                                 NULL,
-                                 TRUE,
-                                 0,
-                                 0,
-                                 0,
-                                 PnpEventThread,
-                                 &USetupData.SetupInf,
-                                 &hPnpThread,
-                                 NULL);
+    /* Initialize the user-mode PnP manager */
+    Status = InitializeUserModePnpManager(&USetupData.SetupInf);
     if (!NT_SUCCESS(Status))
-        hPnpThread = NULL;
+    {
+        // PrintString(??);
+        DPRINT1("The user-mode PnP manager could not initialize (Status 0x%08lx), expect unavailable devices!\n", Status);
+    }
 
     if (!CONSOLE_Init())
     {
@@ -4505,12 +4533,12 @@ RunUSetup(VOID)
     InitializeSetup(&USetupData, 0);
     USetupData.ErrorRoutine = USetupErrorRoutine;
 
-    /* Hide the cursor */
+    /* Hide the cursor and clear the screen and keyboard buffer */
     CONSOLE_SetCursorType(TRUE, FALSE);
-
-    /* Global Initialization page */
     CONSOLE_ClearScreen();
     CONSOLE_Flush();
+
+    /* Global Initialization page */
     Page = SetupStartPage(&Ir);
 
     while (Page != REBOOT_PAGE && Page != RECOVERY_PAGE)
@@ -4662,11 +4690,16 @@ RunUSetup(VOID)
                 Page = QuitPage(&Ir);
                 break;
 
-            case RECOVERY_PAGE:
+            /* Virtual pages */
+            case SETUP_INIT_PAGE:
             case REBOOT_PAGE:
+            case RECOVERY_PAGE:
                 break;
         }
     }
+
+    /* Terminate the user-mode PnP manager */
+    TerminateUserModePnpManager();
 
     /* Setup has finished */
     FinishSetup(&USetupData);
